@@ -1,0 +1,9 @@
+# Secretos
+.env
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Area de trabajo del duelo (copia temporal del codigo auditado)
+_work_duelo/
