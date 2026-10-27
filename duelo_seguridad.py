@@ -26,22 +26,25 @@ ni malware: produce informes de vulnerabilidad y remediaciones.
 
 ------------------------------------------------------------------
 Requisitos:
-    pip install anthropic
-    export ANTHROPIC_API_KEY="tu-api-key"   # (en Windows: set ...)
+    pip install -r requirements.txt     (anthropic + python-dotenv)
+    Crea un fichero .env con:  ANTHROPIC_API_KEY=tu-api-key
 
 Uso:
-    python duelo_seguridad.py
+    python duelo_seguridad.py                        # demo
+    python duelo_seguridad.py mi_app.py --rondas 3   # tu código
+    python duelo_seguridad.py mi_app.py --salida app_segura.py
 ==================================================================
 """
 
 import os
 import json
 import argparse
-import textwrap
-import unicodedata
 from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
+
+from comun import (C, InformeInvalido, extraer_vulnerabilidades, parsear_json,
+                   imprimir_vulns, imprimir_marcador, puntuar, bloqueantes)
 
 # ------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -56,33 +59,6 @@ client = Anthropic()
 MODELO = "claude-sonnet-4-6"
 
 MAX_RONDAS = 4          # nº máximo de iteraciones rojo<->azul
-# OJO: las claves van SIN tilde y en MAYÚSCULAS porque comparamos
-# siempre con normalizar_sev(), que quita acentos y pasa a mayúsculas.
-# Así "Crítica", "CRITICA" y "CRÍTICA" cuentan todas igual.
-SEVERIDADES_BLOQUEANTES = {"CRITICA", "ALTA"}  # si quedan de estas, no hay victoria azul
-
-# Puntos por severidad (para el marcador del "duelo")
-PESOS = {"CRITICA": 10, "ALTA": 6, "MEDIA": 3, "BAJA": 1}
-
-
-def normalizar_sev(sev: str) -> str:
-    """Pasa una severidad a forma canónica: mayúsculas y sin tildes.
-    'Crítica' -> 'CRITICA', 'alta' -> 'ALTA'. Así no dependemos de
-    cómo escriba exactamente el modelo la palabra."""
-    s = (sev or "").strip().upper()
-    # NFD descompone 'Í' en 'I' + tilde; quitamos los acentos (categoría Mn).
-    return "".join(c for c in unicodedata.normalize("NFD", s)
-                   if unicodedata.category(c) != "Mn")
-
-# Colores ANSI para la consola (puramente cosmético)
-class C:
-    ROJO = "\033[91m"
-    AZUL = "\033[94m"
-    VERDE = "\033[92m"
-    AMAR = "\033[93m"
-    GRIS = "\033[90m"
-    NEG = "\033[1m"
-    OFF = "\033[0m"
 
 
 # ------------------------------------------------------------------
@@ -103,22 +79,6 @@ def llamar_claude(system: str, prompt: str, max_tokens: int = 4000) -> str:
                        f"El JSON puede venir incompleto." + C.OFF)
     # La respuesta puede venir en varios bloques; concatenamos el texto.
     return "".join(b.text for b in resp.content if b.type == "text")
-
-
-def parsear_json(texto: str):
-    """Extrae el JSON de la respuesta aunque venga envuelto en ```json ... ```."""
-    limpio = texto.strip()
-    if limpio.startswith("```"):
-        # quitamos la primera y última línea de las vallas de código
-        limpio = "\n".join(limpio.split("\n")[1:])
-        if limpio.rstrip().endswith("```"):
-            limpio = limpio.rstrip()[:-3]
-    # por si quedara algún prefijo, buscamos el primer { o [
-    inicio = min(
-        (i for i in (limpio.find("{"), limpio.find("[")) if i != -1),
-        default=0,
-    )
-    return json.loads(limpio[inicio:])
 
 
 # ------------------------------------------------------------------
@@ -160,20 +120,30 @@ Si el código está limpio, devuelve {"vulnerabilidades": []}.
 NO inventes vulnerabilidades que no existan. Sé riguroso pero honesto."""
 
 
-def agente_rojo(codigo: str) -> list:
+def agente_rojo(codigo: str, reintentos: int = 1) -> list:
+    """Devuelve la lista de vulnerabilidades encontradas.
+
+    Si la respuesta no es un JSON válido se reintenta; si sigue fallando se
+    lanza InformeInvalido. NUNCA se devuelve [] por un error de parseo, porque
+    [] significa "código limpio" y daría la victoria al azul sin merecerla."""
     prompt = f"""Audita el siguiente código y reporta sus vulnerabilidades en el JSON indicado:
 
 ```
 {codigo}
 ```"""
-    salida = llamar_claude(SYSTEM_ROJO, prompt)
-    try:
-        data = parsear_json(salida)
-        return data.get("vulnerabilidades", [])
-    except (json.JSONDecodeError, ValueError):
-        print(C.AMAR + "[!] El rojo no devolvió JSON válido. Respuesta cruda:" + C.OFF)
-        print(salida)
-        return []
+    for intento in range(reintentos + 1):
+        salida = llamar_claude(SYSTEM_ROJO, prompt)
+        try:
+            return extraer_vulnerabilidades(salida)
+        except InformeInvalido as e:
+            print(C.AMAR + f"[!] El rojo no devolvió un informe válido ({e})." + C.OFF)
+            if intento < reintentos:
+                print(C.AMAR + "    Reintentando..." + C.OFF)
+                prompt += ("\n\nIMPORTANTE: responde SOLO con el JSON pedido, "
+                           "sin texto adicional.")
+            else:
+                print(C.GRIS + "Respuesta cruda:\n" + salida + C.OFF)
+    raise InformeInvalido("el rojo no devolvió un informe válido tras reintentar")
 
 
 # ------------------------------------------------------------------
@@ -229,38 +199,12 @@ Devuelve el código parcheado en el JSON indicado."""
 
 
 # ------------------------------------------------------------------
-# IMPRESIÓN
-# ------------------------------------------------------------------
-def color_sev(sev: str) -> str:
-    color = {
-        "CRITICA": C.ROJO + C.NEG,
-        "ALTA": C.ROJO,
-        "MEDIA": C.AMAR,
-        "BAJA": C.GRIS,
-    }.get(normalizar_sev(sev), "")
-    return color + sev + C.OFF
-
-
-def imprimir_vulns(vulns: list):
-    if not vulns:
-        print(C.VERDE + "    Sin vulnerabilidades detectadas. " + C.OFF)
-        return
-    for v in vulns:
-        print(f"  {C.NEG}[{v.get('id','?')}] {v.get('titulo','')}{C.OFF}  "
-              f"({color_sev(v.get('severidad','?'))})")
-        print(f"      {C.GRIS}{v.get('categoria','')} · {v.get('ubicacion','')}{C.OFF}")
-        print(textwrap.fill(v.get("descripcion", ""), width=78,
-                            initial_indent="      ", subsequent_indent="      "))
-
-
-def puntuar(vulns: list) -> int:
-    return sum(PESOS.get(normalizar_sev(v.get("severidad")), 1) for v in vulns)
-
-
-# ------------------------------------------------------------------
 # ORQUESTADOR DEL DUELO
 # ------------------------------------------------------------------
-def duelo(codigo_inicial: str, max_rondas: int = MAX_RONDAS):
+def duelo(codigo_inicial: str, max_rondas: int = MAX_RONDAS,
+          salida: Path | None = None) -> str | None:
+    """Ejecuta el duelo y devuelve el código final (o None si se interrumpe).
+    Si se indica `salida`, guarda ahí el código endurecido."""
     codigo = codigo_inicial
     historial = []
 
@@ -273,23 +217,27 @@ def duelo(codigo_inicial: str, max_rondas: int = MAX_RONDAS):
 
         # 1) El rojo ataca
         print(f"{C.ROJO}🔴 ROJO auditando...{C.OFF}")
-        vulns = agente_rojo(codigo)
+        try:
+            vulns = agente_rojo(codigo)
+        except InformeInvalido as e:
+            # Sin informe fiable no se puede decidir un ganador: paramos.
+            print(f"\n{C.AMAR}{C.NEG}⚠ Duelo interrumpido:{C.OFF} {e}. "
+                  f"No se declara ganador.")
+            imprimir_marcador(historial)
+            return None
         imprimir_vulns(vulns)
-        puntos_rojo = puntuar(vulns)
-        historial.append({"ronda": ronda, "puntos_rojo": puntos_rojo, "n_vulns": len(vulns)})
+        historial.append({"ronda": ronda, "puntos": puntuar(vulns), "n_vulns": len(vulns)})
 
-        # ¿Quedan fallos bloqueantes? (comparamos normalizado para no
-        # fallar por tildes o mayúsculas/minúsculas)
-        bloqueantes = [v for v in vulns
-                       if normalizar_sev(v.get("severidad")) in SEVERIDADES_BLOQUEANTES]
-        if not bloqueantes:
+        # ¿Quedan fallos bloqueantes (CRÍTICA/ALTA)?
+        pendientes = bloqueantes(vulns)
+        if not pendientes:
             print(f"\n{C.AZUL}{C.NEG}🏆 ¡Gana AZUL!{C.OFF} "
                   f"El rojo ya no encuentra fallos críticos ni altos.")
             print(f"{C.GRIS}(Pueden quedar avisos menores; revisa el informe.){C.OFF}")
             break
 
         # 2) El azul defiende
-        print(f"\n{C.AZUL}🔵 AZUL parcheando ({len(bloqueantes)} fallos bloqueantes)...{C.OFF}")
+        print(f"\n{C.AZUL}🔵 AZUL parcheando ({len(pendientes)} fallos bloqueantes)...{C.OFF}")
         resultado = agente_azul(codigo, vulns)
         codigo = resultado.get("codigo_corregido", codigo)
         for c in resultado.get("cambios", []):
@@ -302,15 +250,13 @@ def duelo(codigo_inicial: str, max_rondas: int = MAX_RONDAS):
         print(f"\n{C.ROJO}{C.NEG}🏆 ¡Gana ROJO!{C.OFF} "
               f"Tras {max_rondas} rondas siguen quedando agujeros sin cerrar.")
 
-    # Resumen del marcador
-    print(f"\n{C.NEG}── MARCADOR (fallos encontrados por ronda) ──{C.OFF}")
-    for h in historial:
-        barra = "█" * h["puntos_rojo"]
-        print(f"  Ronda {h['ronda']}: {C.ROJO}{barra}{C.OFF} "
-              f"{h['puntos_rojo']} pts · {h['n_vulns']} vulns")
+    imprimir_marcador(historial)
 
     print(f"\n{C.NEG}── CÓDIGO FINAL ──{C.OFF}")
     print(codigo)
+    if salida:
+        salida.write_text(codigo, encoding="utf-8")
+        print(f"\n{C.VERDE}💾 Código endurecido guardado en: {salida}{C.OFF}")
     return codigo
 
 
@@ -358,6 +304,9 @@ if __name__ == "__main__":
                         help="ruta del código a auditar (si se omite, usa la demo)")
     parser.add_argument("--rondas", type=int, default=MAX_RONDAS,
                         help=f"número máximo de rondas (por defecto {MAX_RONDAS})")
+    parser.add_argument("--salida",
+                        help="dónde guardar el código endurecido "
+                             "(por defecto: <archivo>_endurecido.<ext>)")
     args = parser.parse_args()
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -372,8 +321,12 @@ if __name__ == "__main__":
             raise SystemExit(1)
         codigo = ruta.read_text(encoding="utf-8")
         print(f"📄 Auditando: {ruta} ({len(codigo)} caracteres)")
+        salida = Path(args.salida) if args.salida else ruta.with_name(
+            f"{ruta.stem}_endurecido{ruta.suffix}")
     else:
         codigo = CODIGO_VULNERABLE
         print("ℹ️  Sin archivo indicado: usando la demo CODIGO_VULNERABLE.")
+        salida = Path(args.salida) if args.salida else Path("demo_endurecido.py")
 
-    duelo(codigo, max_rondas=args.rondas)
+    resultado = duelo(codigo, max_rondas=args.rondas, salida=salida)
+    raise SystemExit(0 if resultado is not None else 1)

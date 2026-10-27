@@ -1,0 +1,8 @@
+# Version 1: raw Anthropic API (duelo_seguridad.py)
+anthropic
+python-dotenv
+
+# Version 2: Claude Agent SDK (duelo_seguridad_sdk.py)
+# also needs the Claude Code CLI:  npm install -g @anthropic-ai/claude-code
+claude-agent-sdk
+bandit

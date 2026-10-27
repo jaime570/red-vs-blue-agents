@@ -1,0 +1,52 @@
+[
+  {
+    "id": "V1",
+    "titulo": "Endpoint /file devuelve contenido de fichero sin Content-Type seguro ni cabecera anti-sniffing",
+    "severidad": "MEDIA",
+    "categoria": "A05:2021 Security Misconfiguration / CWE-79, CWE-116 (Improper Encoding/Handling of Output)",
+    "ubicacion": "app.py, función read_file() (líneas 175-202, en concreto 198-200: `with open(real_path) as f: return f.read()`)",
+    "descripcion": "El endpoint devuelve el contenido íntegro del fichero como una cadena de texto sin fijar explícitamente un Content-Type seguro (p.ej. text/plain o application/octet-stream) ni la cabecera X-Content-Type-Options: nosniff. Cuando una vista de Flask devuelve un string plano, el Content-Type por defecto es 'text/html; charset=utf-8', por lo que si el fichero servido contiene HTML/JavaScript, el navegador lo interpretará y ejecutará como una página HTML.",
+    "vector_ataque": "Si por cualquier vía (otra funcionalidad futura, un proceso batch, logs, ficheros subidos o copiados manualmente a DATA_DIR) llega a depositarse en DATA_DIR un fichero con contenido HTML/JS controlado por un atacante, cualquier usuario autenticado que visite /file?name=ese_fichero vería ese script ejecutado en el contexto de origen de la aplicación (XSS almacenado), pudiendo robar la cookie de sesión (aunque HttpOnly mitiga el robo directo vía JS) o realizar acciones en nombre de la víctima.",
+    "recomendacion": "Forzar un Content-Type neutro al servir el fichero (por ejemplo usando send_file/send_from_directory con mimetype='application/octet-stream' o 'text/plain', y as_attachment=True si procede) y añadir la cabecera 'X-Content-Type-Options: nosniff' a nivel global de la aplicación."
+  },
+  {
+    "id": "V2",
+    "titulo": "Crecimiento no acotado de la estructura de rate limiting en memoria (riesgo de agotamiento de memoria)",
+    "severidad": "BAJA",
+    "categoria": "A04:2021 Insecure Design / CWE-400 Uncontrolled Resource Consumption",
+    "ubicacion": "app.py, líneas 56-70 (`_login_attempts = defaultdict(list)` y `_login_rate_limited`)",
+    "descripcion": "El diccionario _login_attempts solo purga los intentos antiguos dentro de la lista de cada clave, pero nunca elimina claves (IP+usuario) que ya no tienen intentos recientes. Un atacante que pruebe muchos nombres de usuario distintos desde varias IPs (o rotando IP) genera una entrada nueva por cada combinación, haciendo crecer el diccionario indefinidamente mientras el proceso esté vivo.",
+    "vector_ataque": "Un atacante puede automatizar peticiones a /login con combinaciones IP/usuario distintas (usuarios inventados, X-Forwarded-For si hay proxy mal configurado, etc.) para forzar un crecimiento continuo de memoria del proceso, degradando el servicio (DoS por agotamiento de memoria) a largo plazo.",
+    "recomendacion": "Purgar periódicamente (o en cada acceso) las claves cuya lista de intentos quede vacía, limitar el tamaño máximo de la estructura, o sustituir el limitador en memoria por uno respaldado en un almacén externo (Redis) con expiración automática (TTL) por clave; esto también resuelve que el límite no es compartido entre varios workers/réplicas."
+  },
+  {
+    "id": "V3",
+    "titulo": "Ausencia de límite de tamaño de petición (MAX_CONTENT_LENGTH no configurado)",
+    "severidad": "BAJA",
+    "categoria": "A05:2021 Security Misconfiguration / CWE-400 Uncontrolled Resource Consumption",
+    "ubicacion": "app.py, configuración global de Flask (líneas 15-46, no se fija app.config['MAX_CONTENT_LENGTH'])",
+    "descripcion": "La aplicación no limita el tamaño máximo del cuerpo de las peticiones entrantes. Tanto request.get_json() como request.form pueden intentar parsear cuerpos arbitrariamente grandes antes de llegar a cualquier validación de negocio.",
+    "vector_ataque": "Un atacante puede enviar repetidamente peticiones POST a /login (u otros endpoints) con cuerpos muy voluminosos para consumir memoria/CPU del servidor y degradar la disponibilidad del servicio (DoS).",
+    "recomendacion": "Configurar app.config['MAX_CONTENT_LENGTH'] con un valor razonable acorde al payload esperado (las credenciales y el token CSRF son pequeños), de forma que Flask rechace automáticamente peticiones más grandes con 413."
+  },
+  {
+    "id": "V4",
+    "titulo": "Sesión sin tiempo de expiración explícito",
+    "severidad": "BAJA",
+    "categoria": "A07:2021 Identification and Authentication Failures / CWE-613 Insufficient Session Expiration",
+    "ubicacion": "app.py, configuración global de Flask (líneas 44-46, no se fija app.config['PERMANENT_SESSION_LIFETIME'] ni session.permanent)",
+    "descripcion": "No se establece un tiempo de vida máximo para la sesión. Por defecto, la cookie de sesión de Flask es de tipo 'sesión de navegador' (expira al cerrar el navegador) pero no hay una caducidad de inactividad/absoluta gestionada por el servidor, por lo que una sesión autenticada puede permanecer válida indefinidamente si el navegador no se cierra.",
+    "vector_ataque": "En un equipo compartido o si una cookie de sesión llega a ser interceptada (p. ej. por malware en el cliente o un descuido físico), la sesión robada seguiría siendo válida durante mucho tiempo, ampliando la ventana de explotación de un secuestro de sesión.",
+    "recomendacion": "Fijar app.config['PERMANENT_SESSION_LIFETIME'] a un valor corto (p. ej. 15-30 minutos de inactividad) y marcar session.permanent = True tras el login, regenerando/expirando la sesión tras ese periodo."
+  },
+  {
+    "id": "V5",
+    "titulo": "Ausencia de cabeceras de seguridad HTTP adicionales",
+    "severidad": "BAJA",
+    "categoria": "A05:2021 Security Misconfiguration",
+    "ubicacion": "app.py, configuración global de la aplicación (no se registra ningún after_request/Talisman que añada cabeceras)",
+    "descripcion": "La aplicación no añade cabeceras de defensa en profundidad como Strict-Transport-Security (HSTS), X-Content-Type-Options: nosniff, X-Frame-Options/Content-Security-Policy. Aunque SESSION_COOKIE_SECURE ya exige HTTPS para la cookie, sin HSTS el navegador podría aceptar una primera conexión HTTP susceptible de downgrade/sslstrip.",
+    "vector_ataque": "Un atacante en posición de red (Wi-Fi compartida, proxy malicioso) podría intentar forzar a la víctima a una conexión HTTP inicial (antes de que el navegador conozca la política HSTS) para interceptar tráfico, o explotar la falta de X-Frame-Options/CSP para técnicas de clickjacking si en el futuro se añaden vistas HTML interactivas.",
+    "recomendacion": "Añadir mediante un hook after_request (o la librería flask-talisman) las cabeceras Strict-Transport-Security, X-Content-Type-Options: nosniff, X-Frame-Options: DENY y una Content-Security-Policy restrictiva, y servir siempre detrás de un proxy/WSGI de producción con TLS terminado correctamente."
+  }
+]

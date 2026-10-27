@@ -7,3 +7,6 @@ __pycache__/
 
 # Area de trabajo del duelo (copia temporal del codigo auditado)
 _work_duelo/
+
+# Salida por defecto de la demo (version API)
+demo_endurecido.py

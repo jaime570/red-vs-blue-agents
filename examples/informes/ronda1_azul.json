@@ -1,0 +1,41 @@
+{
+  "cambios": [
+    {
+      "id": "V1",
+      "fichero": "app.py",
+      "cambio": "Sustituida la concatenación de cadenas en la consulta SQL por una consulta parametrizada con placeholder '?' (conn.execute('SELECT pw FROM users WHERE name = ?', (user,))), eliminando la inyección SQL."
+    },
+    {
+      "id": "V2",
+      "fichero": "app.py",
+      "cambio": "Endpoint /file reescrito: se rechaza cualquier 'name' que no sea un nombre de fichero simple (os.path.basename(name) != name), se construye la ruta con werkzeug.utils.safe_join sobre un DATA_DIR resuelto con os.path.realpath, y se verifica de nuevo que la ruta final sigue dentro de DATA_DIR antes de abrir el fichero (defensa en profundidad contra path traversal)."
+    },
+    {
+      "id": "V3",
+      "fichero": "app.py",
+      "cambio": "app.run(debug=True) reemplazado por app.run(debug=debug_mode), donde debug_mode solo se activa si la variable de entorno FLASK_DEBUG='true' está explícitamente definida; por defecto el debug está desactivado."
+    },
+    {
+      "id": "V4",
+      "fichero": "app.py",
+      "cambio": "Eliminada la constante DB_PASSWORD = 'admin123' hardcodeada; ahora se carga (si se necesita) desde la variable de entorno DB_PASSWORD. También SECRET_KEY (usada para firmar la sesión) se carga desde entorno, con fallback a un valor aleatorio efímero solo para desarrollo."
+    },
+    {
+      "id": "V5",
+      "fichero": "app.py",
+      "cambio": "La comparación de contraseñas ya no se hace en la cláusula SQL contra texto plano: ahora se recupera solo el hash almacenado en la columna 'pw' y se verifica con werkzeug.security.check_password_hash, asumiendo que las contraseñas se almacenan con un algoritmo de hash seguro con salt (generadas con generate_password_hash)."
+    },
+    {
+      "id": "V6",
+      "fichero": "app.py",
+      "cambio": "Añadido manejo de sesión de Flask: tras un login correcto se establece session['user']; se creó el decorador login_required que se aplica al endpoint /file, de forma que ya no es accesible de forma anónima."
+    },
+    {
+      "id": "V7",
+      "fichero": "app.py",
+      "cambio": "El mensaje de error para credenciales inválidas es ahora siempre 'Login incorrecto' (con código 401), igual independientemente de si falla el usuario o la contraseña, evitando enumeración de cuentas; y el nombre de usuario reflejado en el mensaje de bienvenida se escapa con markupsafe.escape para evitar XSS reflejado."
+    }
+  ],
+  "tests": "No existían tests en el proyecto. No se pudieron ejecutar pruebas funcionales porque el entorno no tiene instalado el paquete 'flask' (ModuleNotFoundError) ni 'pytest'. Se verificó al menos que el fichero compila correctamente con 'python -m py_compile app.py' (SYNTAX_OK).",
+  "notas": "El fix de V5/V1 asume que la columna 'pw' de la tabla 'users' pasa a almacenar un hash (generado con werkzeug.security.generate_password_hash) en lugar de texto plano; si la base de datos actual tiene contraseñas en claro, habría que migrar los registros existentes a hashes antes de desplegar este cambio. La protección de /file con sesión (V6) añade un requisito de autenticación previa que no existía, necesario para cerrar el acceso anónimo a ficheros; se recomienda además ejecutar la app en producción tras un proxy con HTTPS y usar un servidor WSGI (gunicorn/uWSGI) en vez de app.run(). Se recomienda también añadir secret-scanning en CI para detectar futuras credenciales hardcodeadas."
+}

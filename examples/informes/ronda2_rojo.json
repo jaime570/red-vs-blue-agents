@@ -1,0 +1,62 @@
+[
+  {
+    "id": "V1",
+    "titulo": "Credenciales transmitidas por parámetros GET en /login",
+    "severidad": "ALTA",
+    "categoria": "A02:2021 Cryptographic Failures / CWE-598 Use of GET Request Method With Sensitive Query Strings",
+    "ubicacion": "app.py, función login() (líneas 34-37)",
+    "descripcion": "El endpoint /login acepta el usuario y, sobre todo, la contraseña ('pw') como parámetros de query string en una petición GET en lugar de en el cuerpo de una petición POST. Las URLs con estos parámetros quedan registradas en logs de acceso del servidor web, en proxies intermedios, en el historial del navegador, en cachés y pueden filtrarse a terceros a través de la cabecera Referer si la página enlaza recursos externos.",
+    "vector_ataque": "Un atacante con acceso a logs del servidor, a un proxy corporativo, al historial del navegador de la víctima o que intercepte la petición en una red sin TLS terminado correctamente, puede leer usuario y contraseña en texto claro directamente desde la URL, sin necesidad de descifrar nada del cuerpo de la petición.",
+    "recomendacion": "Cambiar el endpoint para que acepte el login mediante POST, enviando 'user' y 'pw' en el cuerpo de la petición (form-data o JSON), nunca en la query string. Forzar HTTPS y considerar cabeceras que impidan el cacheo de la respuesta."
+  },
+  {
+    "id": "V2",
+    "titulo": "Login mediante GET sin protección CSRF (login CSRF)",
+    "severidad": "MEDIA",
+    "categoria": "A01:2021 Broken Access Control / CWE-352 Cross-Site Request Forgery",
+    "ubicacion": "app.py, función login() (líneas 34-61)",
+    "descripcion": "El login se realiza con una petición GET que cambia el estado de la sesión del usuario (session['user']). Al ser una acción de cambio de estado accesible mediante una simple URL (sin token CSRF ni verificación de origen), puede ser disparada desde un sitio de terceros (por ejemplo, incrustando la URL en una etiqueta <img> o redirección).",
+    "vector_ataque": "Un atacante podría inducir a la víctima a visitar una página que dispare automáticamente una petición a '/login?user=atacante&pw=credencial_del_atacante', provocando que la sesión de la víctima quede autenticada como el usuario del atacante (login CSRF), lo que puede usarse para engañar a la víctima haciéndole creer que actúa en su propia cuenta cuando en realidad interactúa con datos del atacante, o para fijar una sesión controlada por el atacante.",
+    "recomendacion": "Usar POST para el login con protección CSRF (p. ej. Flask-WTF/flask-seasurf), y no permitir que una acción que modifica el estado de sesión se ejecute vía GET."
+  },
+  {
+    "id": "V3",
+    "titulo": "Ausencia de límite de intentos / protección contra fuerza bruta en /login",
+    "severidad": "MEDIA",
+    "categoria": "A07:2021 Identification and Authentication Failures / CWE-307 Improper Restriction of Excessive Authentication Attempts",
+    "ubicacion": "app.py, función login() (líneas 34-61)",
+    "descripcion": "El endpoint /login no implementa ningún mecanismo de límite de tasa (rate limiting), bloqueo temporal de cuenta, CAPTCHA ni retardo progresivo tras intentos fallidos. Un atacante puede enviar un número ilimitado de peticiones probando contraseñas distintas para un mismo usuario.",
+    "vector_ataque": "Un atacante puede automatizar el envío masivo de peticiones a /login variando el parámetro 'pw' para realizar un ataque de fuerza bruta o de diccionario contra una cuenta conocida, sin que la aplicación lo detecte ni lo frene.",
+    "recomendacion": "Añadir limitación de tasa por IP/usuario (p. ej. Flask-Limiter), bloqueo temporal tras N intentos fallidos, y registro/alerta de intentos repetidos de login fallido."
+  },
+  {
+    "id": "V4",
+    "titulo": "Canal lateral de temporización que permite enumeración de usuarios",
+    "severidad": "BAJA",
+    "categoria": "A07:2021 Identification and Authentication Failures / CWE-208 Observable Timing Discrepancy",
+    "ubicacion": "app.py, función login() (líneas 42-61)",
+    "descripcion": "Aunque el mensaje de error es idéntico para usuario inexistente y para contraseña incorrecta (medida correcta contra enumeración), el tiempo de respuesta no es constante: si el usuario no existe, 'row' es None y se omite la llamada a check_password_hash; si el usuario existe, se ejecuta el cálculo de hash (bcrypt/pbkdf2/scrypt), que es deliberadamente costoso en CPU. Esa diferencia de tiempo es medible.",
+    "vector_ataque": "Un atacante puede medir estadísticamente el tiempo de respuesta de múltiples peticiones a /login con distintos nombres de usuario; los que tardan notablemente más (porque sí ejecutan check_password_hash) revelan qué cuentas existen, eludiendo la protección anti-enumeración basada solo en el mensaje devuelto.",
+    "recomendacion": "Igualar los tiempos de respuesta realizando siempre una comparación de hash (por ejemplo contra un hash 'dummy' precalculado) incluso cuando el usuario no exista, de forma que el tiempo de procesamiento sea independiente de si la cuenta existe."
+  },
+  {
+    "id": "V5",
+    "titulo": "Cookies de sesión sin flags de seguridad explícitos (Secure / SameSite)",
+    "severidad": "BAJA",
+    "categoria": "A05:2021 Security Misconfiguration / CWE-614 Sensitive Cookie Without 'Secure' Attribute",
+    "ubicacion": "app.py, configuración global de la app (no se fijan SESSION_COOKIE_SECURE / SESSION_COOKIE_SAMESITE)",
+    "descripcion": "La aplicación no configura explícitamente app.config['SESSION_COOKIE_SECURE'] = True ni SESSION_COOKIE_SAMESITE, dejando los valores por defecto de Flask. Por defecto, la cookie de sesión no se marca como 'Secure', por lo que el navegador podría enviarla también por HTTP si la app llegara a exponerse sin forzar TLS en todos los puntos de la ruta.",
+    "vector_ataque": "Si en algún despliegue existe un punto de la ruta de red sin TLS (HTTP plano) o un downgrade desde HTTPS a HTTP, la cookie de sesión podría viajar en claro y ser capturada por un atacante en la misma red (p. ej. ataque de intercepción en una red Wi-Fi compartida), permitiendo secuestro de sesión.",
+    "recomendacion": "Configurar explícitamente SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True y SESSION_COOKIE_SAMESITE='Lax' (o 'Strict') en la configuración de Flask, y servir la aplicación únicamente sobre HTTPS (HSTS) en producción."
+  },
+  {
+    "id": "V6",
+    "titulo": "Clave de sesión (SECRET_KEY) efímera y no compartida si no se configura por entorno",
+    "severidad": "BAJA",
+    "categoria": "A05:2021 Security Misconfiguration / CWE-330 Use of Insufficiently Random Values (gestión de claves)",
+    "ubicacion": "app.py, línea 15 (app.secret_key = os.environ.get(\"SECRET_KEY\") or secrets.token_hex(32))",
+    "descripcion": "Si la variable de entorno SECRET_KEY no está definida en el despliegue, cada arranque del proceso (y cada worker/réplica en un despliegue con varios procesos, por ejemplo varios workers de gunicorn o varios pods) genera su propia clave aleatoria distinta. Esto no es una vulnerabilidad de fuga de secreto, pero indica que el operador podría desplegar en producción sin haber fijado realmente SECRET_KEY, lo cual invalida sesiones de forma inconsistente entre procesos y puede inducir a depender de comportamientos no deterministas relacionados con la firma de sesión.",
+    "vector_ataque": "No es directamente explotable por un atacante externo, pero facilita un error operativo: si en producción se ejecuta con múltiples procesos/réplicas sin SECRET_KEY fijada, las cookies de sesión firmadas por un proceso no serán válidas en otro, lo que puede llevar a los administradores a 'solucionarlo' bajando el número de réplicas o, peor, hardcodeando una clave débil de forma apresurada.",
+    "recomendacion": "Exigir (fallar al arrancar, no generar una por defecto) que SECRET_KEY esté definida en entornos de producción, y documentar/validar su presencia mediante una comprobación explícita al inicio de la aplicación; gestionar la clave a través de un gestor de secretos."
+  }
+]

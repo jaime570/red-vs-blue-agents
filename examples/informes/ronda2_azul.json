@@ -1,0 +1,36 @@
+{
+  "cambios": [
+    {
+      "id": "V1",
+      "fichero": "app.py",
+      "cambio": "El endpoint /login ya no acepta credenciales por query string en GET. Se separó en GET /login (solo emite un token CSRF, sin aceptar 'user'/'pw') y POST /login, que lee 'user' y 'pw' del cuerpo de la petición (JSON o form-data) mediante _extract_credentials(), nunca de la URL."
+    },
+    {
+      "id": "V2",
+      "fichero": "app.py",
+      "cambio": "Se añadió protección CSRF: _get_csrf_token() genera y liga un token a la sesión (servido por GET /login); el POST /login exige ese token (_extract_csrf_token) y lo valida con hmac.compare_digest antes de procesar cualquier credencial, evitando que un formulario o imagen de un tercero pueda forzar un login. Además se fijó SESSION_COOKIE_SAMESITE='Lax' como defensa adicional."
+    },
+    {
+      "id": "V3",
+      "fichero": "app.py",
+      "cambio": "Se implementó un limitador de intentos en memoria (_login_rate_limited, con ventana deslizante de 60s y máximo 5 intentos) aplicado por clave IP+usuario antes de consultar la base de datos; al superarse el límite se devuelve 429 'Demasiados intentos, inténtalo más tarde'. Verificado con prueba manual: el 6º intento en 60s devuelve 429."
+    },
+    {
+      "id": "V4",
+      "fichero": "app.py",
+      "cambio": "Se precalculó un hash señuelo (_DUMMY_PASSWORD_HASH) y ahora check_password_hash() se ejecuta SIEMPRE (contra el hash real si el usuario existe, o contra el señuelo si no), de modo que el tiempo de cómputo no depende de si la cuenta existe, eliminando el canal lateral de temporización."
+    },
+    {
+      "id": "V5",
+      "fichero": "app.py",
+      "cambio": "Se configuraron explícitamente app.config['SESSION_COOKIE_SECURE']=True, ['SESSION_COOKIE_HTTPONLY']=True y ['SESSION_COOKIE_SAMESITE']='Lax' para impedir el envío de la cookie de sesión por canales no cifrados, su lectura desde JavaScript y su envío en peticiones cross-site no seguras."
+    },
+    {
+      "id": "V6",
+      "fichero": "app.py",
+      "cambio": "Se introdujo APP_ENV (con valor por defecto 'production', postura segura por defecto). Si SECRET_KEY no está definida y APP_ENV es 'production', la aplicación lanza RuntimeError y no arranca; solo en entornos explícitamente no productivos (APP_ENV=development) se genera una clave efímera. Verificado manualmente: sin SECRET_KEY ni APP_ENV, importar app.py lanza el RuntimeError esperado."
+    }
+  ],
+  "tests": "El proyecto no contiene una suite de tests automatizada (no se encontraron ficheros test*.py ni pytest configurado). Se realizó verificación manual con el test client de Flask (instalado temporalmente con pip para esta comprobación) cubriendo: emisión de token CSRF por GET /login, login correcto vía POST con CSRF válido (200 'Bienvenido alice'), rechazo sin token CSRF (400), credenciales incorrectas y usuario inexistente con la misma respuesta genérica (401 'Login incorrecto'), bloqueo por rate limiting a partir del 6º intento en 60s (429), acceso correcto a /file?name=hello.txt (200) y bloqueo de path traversal en /file?name=../etc/passwd (400). Todo se comportó como se esperaba.",
+  "notas": "Defensa en profundidad adicional recomendada para producción: servir solo sobre HTTPS con HSTS (complementa SESSION_COOKIE_SECURE); sustituir el rate limiter en memoria (válido para un solo proceso) por uno respaldado en Redis/Memcached si se despliega con múltiples workers o réplicas, para que el límite de intentos sea global; y registrar/alertar los intentos fallidos repetidos para detección de fuerza bruta. La lógica de negocio (consulta parametrizada a SQLite, hashing de contraseñas con werkzeug, escapado de salida, protección de path traversal en /file y el decorador login_required) no se modificó."
+}

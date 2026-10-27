@@ -1,0 +1,72 @@
+[
+  {
+    "id": "V1",
+    "titulo": "Inyección SQL en el endpoint de login",
+    "severidad": "CRÍTICA",
+    "categoria": "A03:2021 Injection",
+    "ubicacion": "app.py, función login() (líneas 9-13)",
+    "descripcion": "Los parámetros 'user' y 'pw' recibidos por query string se concatenan directamente en una sentencia SQL sin usar consultas parametrizadas ni sanitización alguna ('SELECT * FROM users WHERE name = '' + user + '' AND pw = '' + pw + ''\"). Esto permite a un atacante alterar la lógica de la consulta.",
+    "vector_ataque": "Un atacante podría manipular los parámetros 'user' o 'pw' en la URL para inyectar fragmentos SQL que alteren la condición WHERE, permitiendo eludir la autenticación (login sin conocer la contraseña) o extraer datos de otras tablas mediante técnicas de UNION-based o boolean-based injection.",
+    "recomendacion": "Usar siempre consultas parametrizadas (placeholders '?') con el driver sqlite3, p.ej.: conn.execute('SELECT * FROM users WHERE name = ? AND pw = ?', (user, pw)). Además, no almacenar ni comparar contraseñas en texto plano; usar hashing seguro (bcrypt/argon2) y comparar el hash."
+  },
+  {
+    "id": "V2",
+    "titulo": "Path Traversal / Local File Inclusion en endpoint de descarga de ficheros",
+    "severidad": "CRÍTICA",
+    "categoria": "A01:2021 Broken Access Control (CWE-22 Path Traversal)",
+    "ubicacion": "app.py, función read_file() (líneas 19-22)",
+    "descripcion": "El parámetro 'name' se concatena directamente a la ruta base '/data/' sin validar ni normalizar la entrada, y el contenido del fichero resultante se devuelve íntegro en la respuesta HTTP.",
+    "vector_ataque": "Un atacante puede usar secuencias como '../../etc/passwd' (o equivalentes) en el parámetro 'name' para escapar del directorio '/data/' y leer cualquier fichero del sistema al que tenga permisos el proceso de Flask, incluyendo ficheros de configuración, claves o código fuente.",
+    "recomendacion": "Validar y normalizar la ruta resultante (os.path.realpath) comprobando que sigue dentro del directorio base permitido (os.path.commonpath), rechazar nombres con '..' o separadores de ruta, usar listas blancas de nombres de fichero permitidos, o usar send_from_directory de Flask que ya mitiga el traversal."
+  },
+  {
+    "id": "V3",
+    "titulo": "Modo debug de Flask habilitado",
+    "severidad": "ALTA",
+    "categoria": "A05:2021 Security Misconfiguration",
+    "ubicacion": "app.py, línea 25 (app.run(debug=True))",
+    "descripcion": "La aplicación se ejecuta con debug=True, lo que activa el depurador interactivo de Werkzeug. Si esta configuración llega a un entorno accesible públicamente, expone una consola interactiva en las páginas de error.",
+    "vector_ataque": "Al provocar un error no controlado en la aplicación (p.ej. con entradas inesperadas), un atacante puede acceder a la consola interactiva de Werkzeug en la página de error y ejecutar código Python arbitrario en el servidor, logrando ejecución remota de comandos (RCE).",
+    "recomendacion": "Desactivar debug en cualquier entorno que no sea estrictamente desarrollo local (debug=False, o controlarlo vía variable de entorno FLASK_DEBUG nunca activada en producción), y usar un servidor WSGI de producción (gunicorn/uWSGI) detrás de un proxy."
+  },
+  {
+    "id": "V4",
+    "titulo": "Credencial / secreto hardcodeado en el código fuente",
+    "severidad": "MEDIA",
+    "categoria": "A07:2021 Identification and Authentication Failures / CWE-798",
+    "ubicacion": "app.py, línea 5 (DB_PASSWORD = \"admin123\")",
+    "descripcion": "Se define una contraseña en texto plano directamente en el código fuente. Aunque en este fragmento no se usa explícitamente, su presencia en el repositorio supone una fuga de credenciales si el código se comparte, versiona en un VCS público o se distribuye.",
+    "vector_ataque": "Cualquier persona con acceso al repositorio (incluyendo su historial de control de versiones) o al código desplegado obtiene la credencial y puede reutilizarla para acceder a la base de datos u otros sistemas que compartan la contraseña.",
+    "recomendacion": "Eliminar credenciales del código; cargarlas desde variables de entorno o un gestor de secretos (Vault, AWS Secrets Manager, etc.), y rotar la credencial expuesta. Añadir comprobaciones de secret-scanning en el pipeline de CI."
+  },
+  {
+    "id": "V5",
+    "titulo": "Almacenamiento/comparación de contraseñas en texto plano",
+    "severidad": "ALTA",
+    "categoria": "A02:2021 Cryptographic Failures",
+    "ubicacion": "app.py, función login() (línea 12)",
+    "descripcion": "La consulta compara directamente el valor recibido 'pw' contra la columna 'pw' de la tabla 'users', lo que indica que las contraseñas se almacenan sin hash ni salteo. No hay evidencia de uso de funciones de hash seguras (bcrypt, scrypt, argon2).",
+    "vector_ataque": "Si la base de datos es comprometida (por la inyección SQL de V1 u otro vector), todas las contraseñas de los usuarios quedarían expuestas en texto claro, permitiendo su reutilización en otros servicios (credential stuffing).",
+    "recomendacion": "Almacenar únicamente hashes de contraseña generados con algoritmos diseñados para ello (bcrypt/argon2/scrypt) con salt único por usuario, y comparar usando funciones de verificación de hash en vez de comparación directa en SQL."
+  },
+  {
+    "id": "V6",
+    "titulo": "Falta de control de sesión/autenticación tras el login",
+    "severidad": "MEDIA",
+    "categoria": "A01:2021 Broken Access Control",
+    "ubicacion": "app.py, endpoints login() y read_file()",
+    "descripcion": "El endpoint /login no establece ninguna sesión, token o cookie tras una autenticación correcta, y el endpoint /file no exige ningún tipo de autenticación ni autorización para acceder a ficheros. Cualquier usuario anónimo puede invocar /file directamente.",
+    "vector_ataque": "Un atacante no autenticado puede acceder directamente al endpoint /file (sin pasar por /login) y, combinado con V2, leer ficheros arbitrarios del servidor sin necesidad de credenciales.",
+    "recomendacion": "Implementar un mecanismo de autenticación/autorización (sesiones firmadas, JWT, Flask-Login) y proteger todos los endpoints sensibles exigiendo que el usuario esté autenticado y autorizado para la operación solicitada."
+  },
+  {
+    "id": "V7",
+    "titulo": "Fuga de información en mensajes de error/respuesta",
+    "severidad": "BAJA",
+    "categoria": "A09:2021 Security Logging and Monitoring Failures / Information Exposure",
+    "ubicacion": "app.py, función login() (línea 15)",
+    "descripcion": "La respuesta 'Bienvenido ' + user refleja directamente la entrada del usuario sin codificar, y los mensajes distintos ('Bienvenido' vs 'Login incorrecto') permiten enumerar usuarios válidos. Además, al no escapar 'user', existe riesgo de XSS reflejado si esta respuesta se renderiza como HTML en el cliente.",
+    "vector_ataque": "Un atacante podría probar distintos nombres de usuario y diferenciar respuestas para enumerar cuentas válidas, o inyectar HTML/JavaScript en el parámetro 'user' que se refleja en la respuesta sin escapar, resultando en Cross-Site Scripting reflejado si el contenido se interpreta como HTML.",
+    "recomendacion": "Usar mensajes de error genéricos e idénticos para credenciales inválidas independientemente del motivo, y escapar/codificar cualquier entrada de usuario antes de incluirla en la respuesta (usar render_template con autoescape de Jinja2 en vez de concatenar strings)."
+  }
+]
